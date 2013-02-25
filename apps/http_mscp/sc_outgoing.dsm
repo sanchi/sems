@@ -6,20 +6,41 @@
 -- for posting call status to SC
 import(mod_curl);
 
+import(mod_sys);
+import(mod_utils);
+
 initial state START
 enter {
   log(3, $scSessionId);
   log(3, $timeout);
-  
+  set($my_cep_url=$config.cep_url);
+  append($my_cep_url, @local_tag);
+    
 -- logAll(3);
 -- set($enable_request_events="true");
  set($enable_reply_events="true");
 };
 
-transition "reply in connecting state" START - sipReply / {
+-- transition "connecting" START / setTimer(1, $timeout) -> CONNECTING;
+
+transition "reply in connecting state" START - sipReply(#code<200) / {
   log(3, "------------------------------------ reply received -------------------");
+  
+  set($msgType="CallProgressing");
+  set($CallProcessing.msCallId=@local_tag);
+  set($CallProcessing.csCallId=scSessionId);
+  sys.getTimestamp(now);
+  sets($CallProcessing.timestamp="(int)$now.tv_sec");
+  sets($CallProcessing.status="(int)100");
+  -- utils.splitStringCR(#headers); todo
+  -- todo: body
+  
+  -- encode into json to variable $msg
+  toJson($msg,(struct)CallProcessing);
   logAll(3);
-  log(3, "------------------------------------ -------------- -------------------");
+  
+  -- here the CEP is sent using mod_curl:
+  curl.post($my_cep_url, msgType;msg);
 } -> START;
 
 -- post state to other leg
