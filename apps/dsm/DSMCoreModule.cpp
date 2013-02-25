@@ -99,6 +99,7 @@ DSMAction* DSMCoreModule::getAction(const string& from_str) {
   DEF_CMD("clear", SCClearAction);
   DEF_CMD("clearArray", SCClearArrayAction);
   DEF_CMD("size", SCSizeAction);
+  DEF_CMD("toJson", SCToJsonAction);
   DEF_CMD("logVars", SCLogVarsAction);
   DEF_CMD("logParams", SCLogParamsAction);
   DEF_CMD("logSelects", SCLogSelectsAction);
@@ -1135,49 +1136,26 @@ void string2argarray(const string& key, const string& val, AmArg& res) {
 
   size_t delim = key.find(".");
   if (delim == string::npos) {
-    res[key]=val;
+    if ((val.size()>5) && (val.substr(0,5)=="(int)")) {
+      char* endptr = NULL;
+      long p_i = strtol(val.substr(5).c_str(), &endptr, 10);
+      if (endptr && *endptr  == '\0') {
+	res[key]=(int)p_i;
+      } else {
+	res[key]=val;
+      }
+    } else {
+      res[key]=val;
+    }
     return;
   }
   string2argarray(key.substr(delim+1), val, res[key.substr(0,delim)]);
 }
 
-EXEC_ACTION_START(SCDIAction) {
-
-  if (params.size() < 2) {
-    ERROR("DI needs at least: mod_name, "
-	  "function_name (in '%s')\n", name.c_str());
-    sc_sess->SET_ERRNO(DSM_ERRNO_UNKNOWN_ARG);
-    sc_sess->SET_STRERROR("DI needs at least: mod_name, "
-			  "function_name (in '"+name+"%s')\n");
-    EXEC_ACTION_STOP;
-  }
-
-  vector<string>::iterator p_it=params.begin();
-  string fact_name = trim(*p_it, " \"");
-  AmDynInvokeFactory* fact = 
-    AmPlugIn::instance()->getFactory4Di(fact_name);
-
-  if(!fact) {
-    ERROR("load module for factory '%s'.\n", fact_name.c_str());
-    sc_sess->SET_ERRNO(DSM_ERRNO_CONFIG);
-    sc_sess->SET_STRERROR("load module for factory '"+fact_name+"'.\n");
-    EXEC_ACTION_STOP;
-  }
-  AmDynInvoke* di_inst = fact->getInstance();
-  if(!di_inst) {
-    ERROR("load module for factory '%s'\n", fact_name.c_str());
-    sc_sess->SET_ERRNO(DSM_ERRNO_CONFIG);
-    sc_sess->SET_STRERROR("load module for factory '"+fact_name+"'.\n");
-    EXEC_ACTION_STOP;
-  }
-  p_it++; 
-
-  string func_name = trim(*p_it, " \""); 
-  p_it++;
-
-  AmArg di_args;
-  
-  while (p_it != params.end()) {
+// convert strings p_it ... p_end to AmArg list in di_args
+int stringarray2AmArg(AmSession* sess, DSMSession* sc_sess, map<string,string>* event_params,
+		      vector<string>::iterator& p_it, const vector<string>::iterator p_end, AmArg& di_args) {
+  while (p_it != p_end) {
     string p = trim(*p_it, " \t");
     if (p.length() && p[0] == '"') {
       di_args.push(trim(p,"\"").c_str());
@@ -1189,11 +1167,10 @@ EXEC_ACTION_START(SCDIAction) {
       if (endptr && *endptr  == '\0') {
 	di_args.push((int)p_i);
       } else {
-	ERROR("converting value '%s' to int\n", 
-	      p.c_str());
+	ERROR("converting value '%s' to int\n", p.c_str());
 	sc_sess->SET_ERRNO(DSM_ERRNO_UNKNOWN_ARG);
 	sc_sess->SET_STRERROR("converting value '"+p+"' to int\n");
-	EXEC_ACTION_STOP;
+	return -1; //EXEC_ACTION_STOP;
       }
     } else if (p.length() > 8 &&  
 	       p.substr(0, 8) =="(struct)") {
@@ -1208,11 +1185,21 @@ EXEC_ACTION_START(SCDIAction) {
 	  break;
 	
 	string varname = lb->first.substr(varprefix.length());
-	if (varname.find(".") == string::npos)
-	  var_struct[varname] = lb->second;
-	else
+	if (varname.find(".") == string::npos){
+	  if ((lb->second.size()>5) && (lb->second.substr(0,5)=="(int)")) {
+	    char* endptr = NULL;
+	    long p_i = strtol(lb->second.substr(5).c_str(), &endptr, 10);
+	    if (endptr && *endptr  == '\0') {
+	      var_struct[varname] = (int)p_i;
+	    } else {
+	      var_struct[varname] = lb->second;
+	    }
+	  } else {
+	    var_struct[varname] = lb->second;
+	  }
+	} else {
 	  string2argarray(varname, lb->second, var_struct);
-	
+	}
 	lb++;
 	has_vars = true;
       }
@@ -1252,6 +1239,48 @@ EXEC_ACTION_START(SCDIAction) {
       di_args.push(resolveVars(p, sess, sc_sess, event_params).c_str());
     }
     p_it++;
+  }
+  return 0;
+}
+
+EXEC_ACTION_START(SCDIAction) {
+
+  if (params.size() < 2) {
+    ERROR("DI needs at least: mod_name, "
+	  "function_name (in '%s')\n", name.c_str());
+    sc_sess->SET_ERRNO(DSM_ERRNO_UNKNOWN_ARG);
+    sc_sess->SET_STRERROR("DI needs at least: mod_name, "
+			  "function_name (in '"+name+"%s')\n");
+    EXEC_ACTION_STOP;
+  }
+
+  vector<string>::iterator p_it=params.begin();
+  string fact_name = trim(*p_it, " \"");
+  AmDynInvokeFactory* fact = 
+    AmPlugIn::instance()->getFactory4Di(fact_name);
+
+  if(!fact) {
+    ERROR("load module for factory '%s'.\n", fact_name.c_str());
+    sc_sess->SET_ERRNO(DSM_ERRNO_CONFIG);
+    sc_sess->SET_STRERROR("load module for factory '"+fact_name+"'.\n");
+    EXEC_ACTION_STOP;
+  }
+  AmDynInvoke* di_inst = fact->getInstance();
+  if(!di_inst) {
+    ERROR("load module for factory '%s'\n", fact_name.c_str());
+    sc_sess->SET_ERRNO(DSM_ERRNO_CONFIG);
+    sc_sess->SET_STRERROR("load module for factory '"+fact_name+"'.\n");
+    EXEC_ACTION_STOP;
+  }
+  p_it++; 
+
+  string func_name = trim(*p_it, " \""); 
+  p_it++;
+
+  AmArg di_args;
+
+  if (0 != stringarray2AmArg(sess, sc_sess, event_params, p_it, params.end(), di_args)) {
+    EXEC_ACTION_STOP;
   }
 
   sc_sess->di_res.clear();
@@ -1324,6 +1353,27 @@ EXEC_ACTION_START(SCDIAction) {
 
 } EXEC_ACTION_END;
   
+
+CONST_ACTION_2P(SCToJsonAction, ',', false);
+EXEC_ACTION_START(SCToJsonAction) {
+  string dstvar = par1;
+  if (dstvar.size() && dstvar[0]=='$')
+    dstvar.erase(0,1);
+
+  vector<string> strs;
+  strs.push_back(resolveVars(par2, sess, sc_sess, event_params));
+  AmArg di_args;
+  vector<string>::iterator s_it = strs.begin();
+  if (0 != stringarray2AmArg(sess, sc_sess, event_params, s_it, strs.end(), di_args)) {
+    DBG("error converting into Arg: '%s'\n", strs[0].c_str());
+  } else {
+    if (isArgUndef(di_args))
+      di_args.push(AmArg());
+    sc_sess->var[dstvar] = arg2json(di_args[0]);
+    DBG("json result: '%s'\n", sc_sess->var[dstvar].c_str());
+  }
+  
+} EXEC_ACTION_END;
 
 CONST_ACTION_2P(SCB2BConnectCalleeAction,',', false);
 EXEC_ACTION_START(SCB2BConnectCalleeAction) {  

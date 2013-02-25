@@ -109,6 +109,12 @@ DSM flow
  clearArray($var)
   clears all var.* variables
 
+ toJson($dstvar, param)
+   convert param to JSON string in $dstvar; see DI action for syntax examples
+   e.g.   set($CallProcessing.msCallId=@local_tag);
+          sets($CallProcessing.status="(int)100");
+          toJson($msg,(struct)CallProcessing);
+
 Playing prompts and file I/O
 ----------------------------
 
