@@ -1,0 +1,66 @@
+-- http_mscp - outgoing call leg 
+-- call set up by createCall from http, and controlled over http
+
+-- import(mod_conference);
+
+-- for posting call status to SC
+import(mod_curl);
+
+initial state START
+enter {
+  log(3, $scSessionId);
+  log(3, $timeout);
+  
+-- logAll(3);
+-- set($enable_request_events="true");
+ set($enable_reply_events="true");
+};
+
+transition "reply in connecting state" START - sipReply / {
+  log(3, "------------------------------------ reply received -------------------");
+  logAll(3);
+  log(3, "------------------------------------ -------------- -------------------");
+} -> START;
+
+-- post state to other leg
+transition "early in callee leg" START - early / {
+  logAll(3);
+} -> START;
+
+transition "ringing in callee leg" START - ringing / {
+  logAll(3);
+} -> START;
+
+transition "failed callee leg" START - failed / {
+  logAll(3);
+  stop(false);
+} -> END;
+
+transition "session starts in callee leg" START - sessionStart / {
+  set($b_status=CONNECTED);
+  logAll(3);
+} -> CONNECTED;
+
+-- audio is connected
+state CONNECTED;
+
+transition "BYE received" CONNECTED - hangup / {
+  logAll(3);
+  --set($b_status=DISCONNECT);
+  --postEvent($b_leg_var.a_ltag, b_status);
+  -- stop the call
+  stop(false);
+} -> END;
+
+
+transition "CCP Disconnect cmd" CONNECTED - event(#msgType=="Disconnect") / {
+  logAll(3);
+  stop(true);
+} -> END;
+
+
+transition "other event received event" CONNECTED - event() / {
+  logParams(3);
+} -> CONNECTED;
+
+state END;
