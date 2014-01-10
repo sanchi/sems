@@ -39,13 +39,21 @@
 #define MOD_NAME "http"
 
 #define HTTP_PORT   7090 // default port
+#define HTTPS_PORT 31337
 
+#define SERVERKEYFILE "key.pem"
+#define SERVERCERTFILE "cert.pem"
+
+#define RESPONSE_QUEUE_NAME "_mod_http_response"
 
 #include <microhttpd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
+#include <fstream>
+
+#include "SimpleRtpRelay.h"
 
 // EXPORT_MODULE_FACTORY(HttpServer)
 // DEFINE_MODULE_INSTANCE(HttpServer, MOD_NAME)
@@ -65,10 +73,18 @@
 // }
 
 MOD_ACTIONEXPORT_BEGIN(MOD_CLS_NAME)
+  DEF_CMD("httpd.createSimpleRtpRelay", MHCreateSimpleRtpRelay);
+  DEF_CMD("httpd.removeRtpRelay", MHRemoveRtpRelay);
 MOD_ACTIONEXPORT_END
+
 MOD_CONDITIONEXPORT_NONE(MOD_CLS_NAME)
 
 SC_EXPORT(MOD_CLS_NAME);
+
+string MOD_CLS_NAME::dsm_http_channel;
+map<string, AmCondition<bool> > MOD_CLS_NAME::channel_reqs;
+map<string, HttpResonseData> MOD_CLS_NAME::http_responses;
+AmMutex MOD_CLS_NAME::reqs_mut;
 
 #define PAGE "<html><head><title>SEMS embedded http server</title>"\
              "</head><body>SEMS embedded http server</body></html>\n"
@@ -131,6 +147,18 @@ static int create_simple_str_response(struct MHD_Connection * connection, unsign
 			     "<body>"+int2str(http_status)+" "+msg+"</body></html>\n");
 }
 
+void MOD_CLS_NAME::postEvent(AmEvent* ev) {
+  DSMEvent* dsm_ev = dynamic_cast<DSMEvent*>(ev);
+  if (NULL != dsm_ev) {
+    reqs_mut.lock();
+    http_responses[dsm_ev->params["req_id"]].body = dsm_ev->params["body"];
+    str2i(dsm_ev->params["code"], http_responses[dsm_ev->params["req_id"]].code);
+    channel_reqs[dsm_ev->params["req_id"]].set(true);
+    reqs_mut.unlock();
+  }
+  delete ev;
+}
+
 static int create_response(void * cls,
 		    struct MHD_Connection * connection,
 		    const char * url,
@@ -143,14 +171,71 @@ static int create_response(void * cls,
   struct MHD_Response * response;
   int ret;
   
-  // DBG("method = '%s'\n", method);
-  // DBG("url = '%s'\n", url);
-  // DBG("upload_data_size = %zd, data = '%s'\n", *upload_data_size, upload_data);
+  DBG("method = '%s'\n", method);
+  DBG("url = '%s'\n", url);
+  DBG("upload_data_size = %zd, data = '%s'\n", *upload_data_size, upload_data);
 
   struct RequestHandlerContext* ctx = (RequestHandlerContext*) *ptr;
 
   // struct MHD_PostProcessor * pp = *ptr;
 
+  if (!MOD_CLS_NAME::dsm_http_channel.empty()) {
+    DBG("dispatching http request to DSM event queue '%s'\n", MOD_CLS_NAME::dsm_http_channel.c_str());
+
+    DSMEvent* ev = new DSMEvent();
+    ev->params["method"] = method;
+    ev->params["url"] = url;
+    string req_id = AmSession::getNewId();
+    ev->params["req_id"] = req_id;
+
+    ev->params["res_queue"] = RESPONSE_QUEUE_NAME;
+
+    MOD_CLS_NAME::reqs_mut.lock();
+    AmCondition<bool>& cond = MOD_CLS_NAME::channel_reqs[req_id];
+    MOD_CLS_NAME::reqs_mut.unlock();
+
+    if (AmEventDispatcher::instance()->post(MOD_CLS_NAME::dsm_http_channel, ev)) {
+
+      // todo: replace this with MHD_suspend_connection for newer MHD lib versions
+      cond.wait_for();
+
+      DBG("response to request '%s' arrived\n", req_id.c_str());
+      MOD_CLS_NAME::reqs_mut.lock();
+      MOD_CLS_NAME::channel_reqs.erase(req_id);
+
+      int ret;
+      struct MHD_Response * response;
+
+      DBG("-> creating http response: '%u' '%s'\n",
+	  MOD_CLS_NAME::http_responses[req_id].code,
+	  MOD_CLS_NAME::http_responses[req_id].body.c_str());
+
+      response = MHD_create_response_from_data (MOD_CLS_NAME::http_responses[req_id].body.length(),
+						const_cast<char*>(MOD_CLS_NAME::http_responses[req_id].body.c_str()),
+						MHD_NO, MHD_NO);
+ 
+      ret = MHD_queue_response(connection, MOD_CLS_NAME::http_responses[req_id].code,
+			       response);
+
+      MOD_CLS_NAME::http_responses.erase(req_id);
+      MOD_CLS_NAME::reqs_mut.unlock();
+
+      MHD_destroy_response(response);
+      return ret;
+
+    } else {
+      MOD_CLS_NAME::reqs_mut.lock();
+      MOD_CLS_NAME::channel_reqs.erase(req_id);
+      MOD_CLS_NAME::reqs_mut.unlock();
+
+      delete ev; // unlike AmSessionContainer, AmEventDispatcher doesn't delete unposted events
+      return create_simple_str_response(connection, 404, "No http handler available");
+    }
+    
+  }
+
+
+  // mscp/ccp app server
   if (0 == strcmp("POST", method)) {
 
     if (ctx == NULL) {
@@ -279,7 +364,7 @@ static int create_response(void * cls,
     }
 
     response = MHD_create_response_from_data(strlen(page),
-					   (void*) page,
+					     (void*) page,
 					     MHD_NO,
 					     MHD_NO);
     ret = MHD_queue_response(connection,
@@ -297,27 +382,95 @@ static int create_response(void * cls,
 
   // other methods
 
-
   *ptr = NULL; /* clear context pointer */
 
   return create_404_response(connection);
-  return ret;
 }
 
 int MOD_CLS_NAME::preload() {
-  DBG("Starting http server on port %u\n", HTTP_PORT);
+
+  AmConfigReader cfg;
+  if(cfg.loadFile(AmConfig::ModConfigPath + "mod_httpd" + string(".conf")))
+    return -1;
+
+  string server_key_file = cfg.getParameter("server_key_file", SERVERKEYFILE);
+  string server_cert_file = cfg.getParameter("server_cert_file", SERVERCERTFILE); 
+
+  unsigned int http_port = cfg.getParameterInt("http_port", HTTP_PORT);  
+  unsigned int https_port = cfg.getParameterInt("https_port", HTTPS_PORT);  
+
+  bool start_https = cfg.getParameter("start_https_server", "true") == "true";
+
+  DBG("libmicrohttpd version '%s'\n", MHD_get_version());
+
+  DBG("Starting http server on port %u\n", http_port);
   struct MHD_Daemon * d;
+
+  struct MHD_Daemon * ds;
  ///void* opt = (void*);
 
   d = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY, //MHD_USE_THREAD_PER_CONNECTION,
-		       HTTP_PORT,
-		       NULL,
-		       NULL,
-		       &create_response,
-		       (void*)PAGE,
-		       MHD_OPTION_END);
-  if (d == NULL)
+  		       http_port,
+  		       NULL,
+  		       NULL,
+  		       &create_response,
+  		       (void*)PAGE,
+  		       MHD_OPTION_END);
+  if (d == NULL) {
+    ERROR("starting http server on port %u\n", http_port);
     return -1;
+  }
+
+  if (start_https) {
+    std::ifstream key_file(server_key_file.c_str(), std::ios::in | std::ios::binary);
+    if (!key_file) {
+      ERROR("could not read server key file '%s'\n", server_key_file.c_str());
+      return -1;
+    }
+    string key_pem((std::istreambuf_iterator<char>(key_file)),
+		   std::istreambuf_iterator<char>());
+    if (key_pem.empty()) {
+      ERROR("server key file '%s' is empty\n", server_key_file.c_str());
+      return false;
+    }
+
+    std::ifstream cert_file(server_cert_file.c_str(), std::ios::in | std::ios::binary);
+    if (!cert_file) {
+      ERROR("could not read server cert file '%s'\n", server_cert_file.c_str());
+      return -1;
+    }
+    string cert_pem((std::istreambuf_iterator<char>(cert_file)),
+		    std::istreambuf_iterator<char>());
+    if (cert_pem.empty()) {
+      ERROR("server cert file '%s' is empty\n", server_cert_file.c_str());
+      return false;
+    }
+    
+    DBG("Starting https server on port %u\n", HTTPS_PORT);
+    ds = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY | MHD_USE_SSL |  MHD_USE_DEBUG, //MHD_USE_THREAD_PER_CONNECTION,
+			  HTTPS_PORT,
+			  NULL,
+			  NULL,
+			  &create_response,
+			  (void*)PAGE,
+			  MHD_OPTION_HTTPS_MEM_KEY, key_pem.c_str(),
+			  MHD_OPTION_HTTPS_MEM_CERT, cert_pem.c_str(),
+			  MHD_OPTION_END);
+    if (ds == NULL) {
+      DBG("starting https server on port %u failed - "
+	  "not compiled with https support, or key/cert issue?", https_port);
+      return -1;
+    }
+  }
+
+  dsm_http_channel = cfg.getParameter("dsm_http_channel");
+  if (!dsm_http_channel.empty()) {
+    INFO("channeling HTTP(S) requests to DSM queue '%s'\n", dsm_http_channel.c_str());
+    DBG("Registering response queue '%s'\n", RESPONSE_QUEUE_NAME);
+
+    AmEventDispatcher::instance()->addEventQueue(RESPONSE_QUEUE_NAME, this);
+  }
+
 
   return 0;
 }

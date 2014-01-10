@@ -31,9 +31,30 @@
 
 #define MOD_CLS_NAME ModHttpd
 
-DECLARE_MODULE_BEGIN(MOD_CLS_NAME);
-  int preload();
-DECLARE_MODULE_END;
+struct HttpResonseData
+{
+  string body;
+  unsigned int code;
+};
+
+class MOD_CLS_NAME
+  : public DSMModule, public AmEventQueueInterface {
+
+ public:
+    MOD_CLS_NAME() { }
+    ~MOD_CLS_NAME() { }
+
+    DSMAction* getAction(const string& from_str);
+    DSMCondition* getCondition(const string& from_str);
+
+    int preload();
+    static string dsm_http_channel;
+
+    static map<string, AmCondition<bool> > channel_reqs;  // condition wait for response availability
+    static map<string, HttpResonseData> http_responses;   // actual response contents
+    static AmMutex reqs_mut; // mutex for the two above
+    void postEvent(AmEvent* ev);
+};
 
 
 /* class HttpServer : public AmDynInvokeFactory, public AmDynInvoke { */
