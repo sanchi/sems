@@ -212,7 +212,7 @@ static int create_response(void * cls,
 
       response = MHD_create_response_from_data (MOD_CLS_NAME::http_responses[req_id].body.length(),
 						const_cast<char*>(MOD_CLS_NAME::http_responses[req_id].body.c_str()),
-						MHD_NO, MHD_NO);
+						MHD_NO, MHD_YES);
  
       ret = MHD_queue_response(connection, MOD_CLS_NAME::http_responses[req_id].code,
 			       response);
