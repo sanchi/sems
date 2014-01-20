@@ -79,6 +79,8 @@ class DSMFactory
   map<string, DSMScriptConfig> Name2ScriptConfig;
   AmMutex ScriptConfigs_mut;
 
+  set<string> redphone_apps;
+
 #ifdef USE_MONITORING
   static MonSelectType MonSelectCaller;
   static MonSelectType MonSelectCallee;

@@ -39,6 +39,8 @@
 #include "AmEventDispatcher.h"
 #include "SystemDSM.h"
 
+#include "DSMRedphoneCall.h"
+
 #include <string>
 #include <fstream>
 
@@ -175,6 +177,12 @@ int DSMFactory::onLoad()
       ERROR("creating system DSM '%s': '%s'\n", it->c_str(), status.c_str());
       return -1;
     }
+  }
+
+  vector<string> redphone_apps_v = explode(cfg.getParameter("redphone_apps"), ",");
+  for (vector<string>::iterator it=redphone_apps_v.begin(); it != redphone_apps_v.end(); it++) {
+    redphone_apps.insert(*it);
+    DBG("registering app for RedPhone call: '%s'\n", it->c_str());
   }
 
 #ifdef USE_MONITORING
@@ -714,7 +722,14 @@ AmSession* DSMFactory::onInvite(const AmSipRequest& req, const string& app_name,
   else 
     call_config = sc->second;
 
-  DSMCall* s = new DSMCall(call_config, &prompts, *call_config.diags, start_diag, NULL);
+  DSMCall* s;
+  
+  // todo: look up modules for this
+  if (redphone_apps.find(start_diag) == redphone_apps.end()) {
+    s = new DSMCall(call_config, &prompts, *call_config.diags, start_diag, NULL);
+  } else {
+    s = new DSMRedphoneCall(call_config, &prompts, *call_config.diags, start_diag, NULL);
+  }
 
   ScriptConfigs_mut.unlock();
 
@@ -775,7 +790,17 @@ AmSession* DSMFactory::onInvite(const AmSipRequest& req, const string& app_name,
   else 
     call_config = sc->second;
 
-  DSMCall* s = new DSMCall(call_config, &prompts, *call_config.diags, start_diag, cred); 
+  DSMCall* s; 
+
+  // todo: look up modules for this, move class in module
+  DBG("looking for '%s'\n", start_diag.c_str());
+  if (redphone_apps.find(start_diag) == redphone_apps.end()) {
+    DBG("Starting standard DSM call\n");
+    s = new DSMCall(call_config, &prompts, *call_config.diags, start_diag, cred);
+  } else {
+    DBG("Starting redphone DSM call\n");
+    s = new DSMRedphoneCall(call_config, &prompts, *call_config.diags, start_diag, cred);
+  }
 
   ScriptConfigs_mut.unlock();
 

@@ -41,6 +41,7 @@ class DSMCall : public AmB2BCallerSession,
 		  public DSMSession,
 		  public CredentialHolder
 {
+protected:
   std::auto_ptr<UACAuthCred> cred;
   
   DSMStateEngine engine;
