@@ -6,7 +6,8 @@ bool _SimpleRtpRelay::createNewRelay(string a_relay_ip, string b_relay_ip, strin
 				     unsigned int& a_port, unsigned int& b_port) {
 
   try {
-    session_id = AmSession::getNewId();
+
+    session_id = long2str((((long)get_random()) << 32) | (u_int32_t)((unsigned long)pthread_self())); //AmSession::getNewId();
     DBG("creating simple RTP relay with session ID '%s'\n", session_id.c_str());
     RtpRelayPair* rp = new RtpRelayPair();
  
@@ -34,6 +35,8 @@ bool _SimpleRtpRelay::createNewRelay(string a_relay_ip, string b_relay_ip, strin
 
     rp->a.setRAddr("0.0.0.0", 0 ,0);
     rp->b.setRAddr("0.0.0.0", 0 ,0);
+
+    rp->a.setHttpResponseMode();
 
     relays_mut.lock();
     relays[session_id] = rp;

@@ -257,6 +257,10 @@ protected:
 
   /** if relay_stream is initialized, received RTP is relayed there */
   bool            relay_enabled;
+
+  /** enable HTTP over UDP relay response NAT hole punch mode (redphone) */
+  bool            http_punch_response;
+
   /** if true, packets are note parsed or checked */
   bool            relay_raw;
   /** pointer to relay stream.
@@ -491,6 +495,9 @@ public:
 
   /** disable raw UDP relaying through relay stream */
   void disableRawRelay();
+
+  /** enable UDP hole punching with HTTP over UDP (redphone) responder */
+  void setHttpResponseMode();
 
   /** enable or disable transparent RTP seqno for relay */
   void setRtpRelayTransparentSeqno(bool transparent);

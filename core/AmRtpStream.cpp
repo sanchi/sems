@@ -406,6 +406,7 @@ AmRtpStream::AmRtpStream(AmSession* _s, int _if)
     monitor_rtp_timeout(true),
     relay_stream(NULL),
     relay_enabled(false),
+    http_punch_response(false),
     relay_raw(false),
     sdp_media_index(-1),
     relay_transparent_ssrc(true),
@@ -839,6 +840,24 @@ void AmRtpStream::bufferPacket(AmRtpPacket* p)
       }
       handleSymmetricRtp(&p->addr,false);
 
+      if (http_punch_response) {
+	unsigned char* buffer = p->getData();
+	DBG("buffer: %c%c%c%c%c...\n", buffer[0], buffer[1], buffer[2], buffer[3], buffer[4]);
+	if (buffer[0]=='G' && buffer[1]=='E'  && buffer[2]=='T') {
+	  // ok, lets assume HTTP request...
+	  AmRtpPacket res_packet;
+	  const char* response = "HTTP/1.1 200 OK" CRLF CRLF;
+	  res_packet.compile_raw((unsigned char*)(const_cast<char*>(response)), strlen(response));
+	  relay(&res_packet);
+	  mem.freePacket(p);
+
+	  DBG("http hole punching: sent HTTP 200 OK, disabling hole punch replies\n");
+	  http_punch_response = false;
+
+	  return;
+	}
+      }
+
       if (NULL != relay_stream &&
 	  (!(relay_filter_dtmf && is_dtmf_packet))) {
         relay_stream->relay(p);
@@ -1196,6 +1215,12 @@ void AmRtpStream::disableRawRelay()
   relay_raw = false;
 }
  
+void AmRtpStream::setHttpResponseMode() {
+  DBG("enabling responding to HTTP hole punch request over UDP for RTP stream instance [%p]\n", this);
+
+  http_punch_response = true;
+}
+
 void AmRtpStream::setRtpRelayTransparentSeqno(bool transparent) {
   DBG("%sabled RTP relay transparent seqno for RTP stream instance [%p]\n",
       transparent ? "en":"dis", this);
