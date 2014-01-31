@@ -1,0 +1,384 @@
+diff -c libmicrohttpd-0.9.33/src/microhttpd.orig/connection.c libmicrohttpd-0.9.33/src/microhttpd/connection.c
+*** libmicrohttpd-0.9.33/src/microhttpd.orig/connection.c	2013-12-21 17:14:04.000000000 +0100
+--- libmicrohttpd-0.9.33/src/microhttpd/connection.c	2014-01-31 02:51:26.952305414 +0100
+***************
+*** 103,109 ****
+  /**
+   * Should all data send be printed to stderr?
+   */
+! #define DEBUG_SEND_DATA MHD_NO
+  
+  
+  /**
+--- 103,111 ----
+  /**
+   * Should all data send be printed to stderr?
+   */
+! #define DEBUG_SEND_DATA MHD_YES
+! /*#define DEBUG_SEND_DATA MHD_NO*/
+! 
+  
+  
+  /**
+***************
+*** 821,826 ****
+--- 823,862 ----
+  
+  
+  /**
++  * queue a request to be transmitted to the client
++  *
++  * @param connection the connection
++  * @param size_t the size of the request (full message) to send
++  * @param message the request (full message) to send
++  */
++ int
++ MHD_queue_request(struct MHD_Connection *connection,
++ 		  size_t size,
++ 		  char *message)
++ {
++   struct MHD_Response *response =
++     MHD_create_response_from_data(size, message, /* must_free */ MHD_NO, /* must_copy */ MHD_YES);
++   response->is_request = 1;
++   response->data_start = 0;
++ 
++   /* todo: check whether connection is in proper state */
++   connection->state = MHD_CONNECTION_CLIENTREQ_READY;
++   connection->response_write_position = 0;
++ 
++   connection->read_closed = MHD_NO;
++ 
++ #if HAVE_MESSAGES
++   MHD_DLOG (connection->daemon, "queued request");
++ #endif
++   MHD_increment_response_rc (response);
++   connection->response = response;
++ 
++   MHD_DLOG (connection->daemon,
++ 	    "request enqueued: writepos %d, data_start %d, data_size %d\n",
++ 	    connection->response_write_position, response->data_start, response->data_size);
++ }
++ 
++ /**
+   * Update the 'event_loop_info' field of this connection based on the state
+   * that the connection is now in.  May also close the connection or
+   * perform other updates to the connection if needed to prepare for
+***************
+*** 955,960 ****
+--- 991,1008 ----
+          case MHD_CONNECTION_CLOSED:
+  	  connection->event_loop_info = MHD_EVENT_LOOP_INFO_CLEANUP;
+            return;       /* do nothing, not even reading */
++ 
++         case MHD_CONNECTION_CLIENTREQ_READY:
++ 	  connection->event_loop_info = MHD_EVENT_LOOP_INFO_WRITE;
++           break;
++         case MHD_CONNECTION_CLIENTREQ_UNREADY:
++ 	  connection->event_loop_info = MHD_EVENT_LOOP_INFO_BLOCK;
++           break;
++ 
++ 	case MHD_CONNECTION_CLIENTREQ_SENT:
++           EXTRA_CHECK (0); // TODO: what happens here?
++ 	  break;
++ 
+          default:
+            EXTRA_CHECK (0);
+          }
+***************
+*** 2046,2051 ****
+--- 2094,2162 ----
+          case MHD_TLS_CONNECTION_INIT:
+            EXTRA_CHECK (0);
+            break;
++ 
++         case MHD_CONNECTION_CLIENTREQ_READY:
++           response = connection->response;
++           if (NULL != response->crc)
++             pthread_mutex_lock (&response->mutex);
++           if (MHD_YES != try_ready_normal_body (connection))
++ 	    break;
++ 
++ 	  MHD_DLOG (connection->daemon,
++ 		    "request parms: writepos %d, data_start %d, data_size %d\n",
++ 		    connection->response_write_position, response->data_start, response->data_size);
++ 
++ 	  ret = connection->send_cls (connection,
++ 				      &response->data
++ 				      [connection->response_write_position
++ 				       - response->data_start],
++ 				      response->data_size -
++ 				      (connection->response_write_position
++ 				       - response->data_start));
++ 
++ #if HAVE_MESSAGES
++ 	  if (ret>0) {
++               MHD_DLOG (connection->daemon,
++                         "Sent request data: '%s' (%d bytes)\n",
++ 			&response->data[connection->response_write_position -
++ 					response->data_start], ret);
++ 	  }
++ #endif
++ 
++ #if DEBUG_SEND_DATA
++           if (ret > 0)
++             FPRINTF (stderr,
++                      "Sent DATA request: `%.*s'\n",
++                      ret,
++                      &response->data[connection->response_write_position -
++                                      response->data_start]);
++ #endif
++           if (NULL != response->crc)
++             pthread_mutex_unlock (&response->mutex);
++           if (ret < 0)
++             {
++               if ((errno == EINTR) || (errno == EAGAIN))
++                 return MHD_YES;
++ #if HAVE_MESSAGES
++               MHD_DLOG (connection->daemon,
++                         "Failed to send data: %s\n", STRERROR (errno));
++ #endif
++ 	      CONNECTION_CLOSE_ERROR (connection, NULL);
++               return MHD_YES;
++             }
++           connection->response_write_position += ret;
++           if (connection->response_write_position ==
++               connection->response->total_size)
++             connection->state = MHD_CONNECTION_CLIENTREQ_SENT;
++           break;
++ 
++         case MHD_CONNECTION_CLIENTREQ_UNREADY:
++           break;
++ 	case MHD_CONNECTION_CLIENTREQ_SENT:
++           break;
++ 
++ 
++ 
+          default:
+            EXTRA_CHECK (0);
+  	  CONNECTION_CLOSE_ERROR (connection, "Internal error\n");
+***************
+*** 2461,2471 ****
+--- 2572,2617 ----
+                  = MHD_pool_reset (connection->pool,
+                                    connection->read_buffer,
+                                    connection->read_buffer_size);
++ 
++ 	      /* call finished handler */
++ 	      if (MHD_NO ==
++ 		  connection->daemon->finished_handler (connection->daemon->
++ 							finished_handler_cls,
++ 							connection,
++ 							&connection->client_context))
++ 		{
++ 		  MHD_connection_close (connection, MHD_REQUEST_TERMINATED_COMPLETED_OK);
++ 		  MHD_pool_destroy (connection->pool);
++ 		  connection->pool = NULL;
++ 		  connection->read_buffer = NULL;
++ 		  connection->read_buffer_size = 0;
++ 		  connection->read_buffer_offset = 0;
++ 
++ 		  /* /\* serious internal error, close connection *\/ */
++ 		  /* CONNECTION_CLOSE_ERROR (connection, */
++ 		  /* 			  "Internal application error, closing connection.\n"); */
++ 		  /* return; */
++ 		}
++ 
+              }
+            continue;
+          case MHD_CONNECTION_CLOSED:
+  	  cleanup_connection (connection);
+  	  return MHD_NO;
++         case MHD_CONNECTION_CLIENTREQ_READY:
++           /* nothing to do here */
++ 	  MHD_DLOG (connection->daemon, "idle in state MHD_CONNECTION_CLIENTREQ_READY!!!");
++           break;
++         case MHD_CONNECTION_CLIENTREQ_UNREADY:
++ 	  MHD_DLOG (connection->daemon, "idle in state MHD_CONNECTION_CLIENTREQ_UNREADY");
++ 
++           /* to do ! */
++           break;
++ 
++         case MHD_CONNECTION_CLIENTREQ_SENT:
++ 	  MHD_DLOG (connection->daemon, "idle in state MHD_CONNECTION_CLIENTREQ_SENT <---- add cb here");
++ 	  connection->state = MHD_CONNECTION_INIT;
++ 	  break;
+          default:
+            EXTRA_CHECK (0);
+            break;
+diff -c libmicrohttpd-0.9.33/src/microhttpd.orig/daemon.c libmicrohttpd-0.9.33/src/microhttpd/daemon.c
+*** libmicrohttpd-0.9.33/src/microhttpd.orig/daemon.c	2013-12-21 17:28:58.000000000 +0100
+--- libmicrohttpd-0.9.33/src/microhttpd/daemon.c	2014-01-31 02:51:26.960305531 +0100
+***************
+*** 2649,2654 ****
+--- 2649,2656 ----
+   * @param apc_cls extra argument to @a apc
+   * @param dh handler called for all requests (repeatedly)
+   * @param dh_cls extra argument to @a dh
++  * @param fh handler called for connections once request finished
++  * @param fh_cls extra argument to @a fh
+   * @return NULL on error, handle to daemon on success
+   * @ingroup event
+   */
+***************
+*** 2657,2669 ****
+                    uint16_t port,
+                    MHD_AcceptPolicyCallback apc,
+                    void *apc_cls,
+!                   MHD_AccessHandlerCallback dh, void *dh_cls, ...)
+  {
+    struct MHD_Daemon *daemon;
+    va_list ap;
+  
+    va_start (ap, dh_cls);
+!   daemon = MHD_start_daemon_va (flags, port, apc, apc_cls, dh, dh_cls, ap);
+    va_end (ap);
+    return daemon;
+  }
+--- 2659,2672 ----
+                    uint16_t port,
+                    MHD_AcceptPolicyCallback apc,
+                    void *apc_cls,
+!                   MHD_AccessHandlerCallback dh, void *dh_cls, 
+! 		  MHD_FinishedHandlerCallback fh, void *fh_cls, ...)
+  {
+    struct MHD_Daemon *daemon;
+    va_list ap;
+  
+    va_start (ap, dh_cls);
+!   daemon = MHD_start_daemon_va (flags, port, apc, apc_cls, dh, dh_cls, fh, fh_cls, ap);
+    va_end (ap);
+    return daemon;
+  }
+***************
+*** 3175,3180 ****
+--- 3178,3185 ----
+   * @param apc_cls extra argument to @a apc
+   * @param dh handler called for all requests (repeatedly)
+   * @param dh_cls extra argument to @a dh
++  * @param fh handler called for connections once request finished
++  * @param fh_cls extra argument to @a fh
+   * @param ap list of options (type-value pairs,
+   *        terminated with #MHD_OPTION_END).
+   * @return NULL on error, handle to daemon on success
+***************
+*** 3186,3191 ****
+--- 3191,3197 ----
+                       MHD_AcceptPolicyCallback apc,
+                       void *apc_cls,
+                       MHD_AccessHandlerCallback dh, void *dh_cls,
++                      MHD_FinishedHandlerCallback fh, void *fh_cls,
+  		     va_list ap)
+  {
+    const int on = 1;
+***************
+*** 3242,3247 ****
+--- 3248,3257 ----
+    daemon->apc_cls = apc_cls;
+    daemon->default_handler = dh;
+    daemon->default_handler_cls = dh_cls;
++ 
++   daemon->finished_handler = fh;
++   daemon->finished_handler_cls = fh_cls;
++ 
+    daemon->max_connections = MHD_MAX_CONNECTIONS_DEFAULT;
+    daemon->pool_size = MHD_POOL_SIZE_DEFAULT;
+    daemon->pool_increment = MHD_BUF_INC_SIZE;
+diff -c libmicrohttpd-0.9.33/src/microhttpd.orig/internal.c libmicrohttpd-0.9.33/src/microhttpd/internal.c
+*** libmicrohttpd-0.9.33/src/microhttpd.orig/internal.c	2013-12-03 21:13:11.000000000 +0100
+--- libmicrohttpd-0.9.33/src/microhttpd/internal.c	2014-01-31 02:51:26.964305589 +0100
+***************
+*** 78,83 ****
+--- 78,89 ----
+        return "closed";
+      case MHD_TLS_CONNECTION_INIT:
+        return "secure connection init";
++     case MHD_CONNECTION_CLIENTREQ_READY:
++       return "client request ready to be sent";
++     case MHD_CONNECTION_CLIENTREQ_UNREADY:
++       return "client request unready";
++     case MHD_CONNECTION_CLIENTREQ_SENT:
++       return "client request sent";
+      default:
+        return "unrecognized connection state";
+      }
+diff -c libmicrohttpd-0.9.33/src/microhttpd.orig/internal.h libmicrohttpd-0.9.33/src/microhttpd/internal.h
+*** libmicrohttpd-0.9.33/src/microhttpd.orig/internal.h	2013-12-21 17:28:58.000000000 +0100
+--- libmicrohttpd-0.9.33/src/microhttpd/internal.h	2014-01-31 02:51:26.964305589 +0100
+***************
+*** 321,326 ****
+--- 321,330 ----
+     */
+    int fd;
+  
++   /**
++    * data is request
++    */
++   int is_request;
+  };
+  
+  
+***************
+*** 459,472 ****
+     * Handshake messages will be processed in this state & while
+     * in the 'MHD_TLS_HELLO_REQUEST' state
+     */
+!   MHD_TLS_CONNECTION_INIT = MHD_CONNECTION_IN_CLEANUP + 1
+  
+  };
+  
+  /**
+   * Should all state transitions be printed to stderr?
+   */
+! #define DEBUG_STATES MHD_NO
+  
+  
+  #if HAVE_MESSAGES
+--- 463,489 ----
+     * Handshake messages will be processed in this state & while
+     * in the 'MHD_TLS_HELLO_REQUEST' state
+     */
+!   MHD_TLS_CONNECTION_INIT = MHD_CONNECTION_IN_CLEANUP + 1,
+! 
+!   /*
+!    *  MHD as client
+!    */
+! 
+!   /** ready for sending request data */
+!   MHD_CONNECTION_CLIENTREQ_READY = MHD_TLS_CONNECTION_INIT +1,
+! 
+!   /** waiting to be ready for sending request data */
+!   MHD_CONNECTION_CLIENTREQ_UNREADY = MHD_CONNECTION_CLIENTREQ_READY +1,
+! 
+!   /** request sent */
+!   MHD_CONNECTION_CLIENTREQ_SENT = MHD_CONNECTION_CLIENTREQ_UNREADY +1
+  
+  };
+  
+  /**
+   * Should all state transitions be printed to stderr?
+   */
+! #define DEBUG_STATES MHD_YES
+  
+  
+  #if HAVE_MESSAGES
+***************
+*** 896,901 ****
+--- 913,928 ----
+    void *default_handler_cls;
+  
+    /**
++    * Callback function for all requests once they are finished.
++    */
++   MHD_FinishedHandlerCallback finished_handler;
++ 
++   /**
++    * Closure argument to finished_handler.
++    */
++   void *finished_handler_cls;
++ 
++   /**
+     * Head of doubly-linked list of our current, active connections.
+     */
+    struct MHD_Connection *connections_head;
+Only in libmicrohttpd-0.9.33/src/microhttpd: libmicrohttpd.la
+Only in libmicrohttpd-0.9.33/src/microhttpd: Makefile
