@@ -1,0 +1,6 @@
+initial state CALL_START
+ enter {
+  logAll(3);
+ };
+
+

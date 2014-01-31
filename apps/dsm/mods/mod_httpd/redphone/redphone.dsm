@@ -1,0 +1,50 @@
+initial state STARTUP;
+import(mod_httpd);
+import(mod_dlg);
+
+transition "starting up" STARTUP - startup / {
+  registerEventQueue("redphone");
+} -> ACCEPT;
+
+state ACCEPT;
+
+transition "Initiate received" ACCEPT - event(#method=="GET") / {
+  logParams(3);
+  set($req_id=#req_id);
+  set($a_ip="127.0.0.1");
+  set($b_ip="192.168.5.110");
+
+  httpd.createSimpleRtpRelay($a_ip, $b_ip);
+  logParams(#session_id);
+  logParams(#a_port);
+  logParams(#b_port);
+  
+    -- caller (from) in 
+  set(b_leg_caller="redphone");
+  -- set(b_leg_auth_user=#caller);
+  -- set(b_leg_auth_pwd=#pwd);
+  set(b_leg_callee="echo");
+  set(b_leg_domain="192.168.5.110:5088");
+  set(b_leg_app=redphone_call);
+  
+  set($b_leg_ltag=#session_id);
+  set(b_leg_var.a_port=#a_port);
+  set(b_leg_var.b_port=#b_port);
+  set(b_leg_var.a_ip=$a_ip);
+  set(b_leg_var.b_ip=$b_ip);
+  
+  --set(b_leg_var.a_ltag=#data);
+  dlg.dialout(b_leg);
+
+  log(2,$b_leg_ltag);
+  
+  --httpd.removeRtpRelay(#session_id);
+  
+  set($code=200);
+  set($a_port=#a_port);
+  set($session_id=#session_id);  
+  sets($body="{ "relayPort" : $a_port, "sessionId" : $session_id, "serverName" : "10.0.2.2"}");
+  postEvent(#res_queue, req_id;code;body);
+
+  log(3, "Initiate handled");
+} -> ACCEPT;
