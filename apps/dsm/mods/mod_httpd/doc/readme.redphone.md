@@ -26,41 +26,40 @@ todo:
 install and configuration (assuming debian/ubuntu)
 --------------------------------------------------
 
-apt-get install libevent-dev g++ make
-git clone https://github.com/sanchi/sems.git
-cd sems
-pushd apps/dsm/mods/mod_httpd
-wget http://ftp.gnu.org/gnu/libmicrohttpd/libmicrohttpd-0.9.33.tar.gz ; tar xzvf libmicrohttpd-0.9.33.tar.gz ; patch -p0 < mhd_patch_clientreq.patch
-popd
-make -C core
-make -C apps/dsm
-cd core
-openssl genrsa -out key.pem 1024
-openssl req -days 365 -out cert.pem -new -x509 -key key.pem
+  apt-get install libevent-dev g++ make
+  git clone https://github.com/sanchi/sems.git
+  cd sems
+  pushd apps/dsm/mods/mod_httpd
+  wget http://ftp.gnu.org/gnu/libmicrohttpd/libmicrohttpd-0.9.33.tar.gz ; tar xzvf libmicrohttpd-0.9.33.tar.gz ; patch -p0 < mhd_patch_clientreq.patch
+  popd
+  make -C core
+  make -C apps/dsm
+  cd core
+  openssl genrsa -out key.pem 1024
+  openssl req -days 365 -out cert.pem -new -x509 -key key.pem
 
-cp etc/sems.conf.sample sems.conf
-cp ../apps/dsm/etc/dsm.conf etc/
-cp ../apps/dsm/mods/mod_httpd/etc/mod_httpd.conf etc/
+  cp etc/sems.conf.sample sems.conf
+  cp ../apps/dsm/etc/dsm.conf etc/
+  cp ../apps/dsm/mods/mod_httpd/etc/mod_httpd.conf etc/
 
-./sems -f etc/sems.conf -D 3 -E
+  ./sems -f etc/sems.conf -D 3 -E
 
 sems.conf changes
 -----------------
-load_plugins=dsm
-plugin_config_path=etc/
-plugin_path=lib/
+ load_plugins=dsm
+ plugin_config_path=etc/
+ plugin_path=lib/
 
 dsm.conf:
 --------
-conf_dir=../apps/dsm/mods/mod_httpd/redphone
-redphone_apps=redphone_call
+ conf_dir=../apps/dsm/mods/mod_httpd/redphone
+ redphone_apps=redphone_call
 
-
-
-Redphone (in emulator)
-----------------------
+Redphone (in emulator AVD)
+--------------------------
 - open whisper.store with portecle (http://portecle.sourceforge.net/), add cert.pem, save store
-- patch redphone:
+- patch redphone: 
+<pre>
 src/org/thoughtcrime/redphone/signaling/signals/Signal.java:
 diff --git a/src/org/thoughtcrime/redphone/signaling/signals/Signal.java b/src/org/thoughtcrime/redphone/signaling/signals/Signal.java
 index 79321c8..4a39996 100644
@@ -98,10 +97,11 @@ index 15eec64..592df65 100644
    public static final int     SERVER_PORT             = 31337;
  }
 
-
+</pre>
 ---------------------------------------------------------------------------------------------
 AVD JNI exception:
- 
+
+<pre>
 D/ATM     (29766): track initialized, buffer size = 16742
 D/dalvikvm(29766): Trying to load lib /data/app-lib/org.thoughtcrime.redphone-2/libredspeex.so 0xb3d5e808
 W/linker  (29766): libredspeex.so has text relocations. This is wasting memory and is a security risk. Please fix.
@@ -189,3 +189,5 @@ I/DEBUG   (   49): Revision: '0'
 I/DEBUG   (   49): pid: 29766, tid: 29888, name: Thread-110  >>> org.thoughtcrime.redphone <<<
 I/DEBUG   (   49): signal 6 (SIGABRT), code -6 (SI_TKILL), fault addr --------
 W/ProcessCpuTracker(  375): Skipping unknown process pid 29894
+
+</pre>
