@@ -159,6 +159,21 @@ void MOD_CLS_NAME::postEvent(AmEvent* ev) {
   delete ev;
 }
 
+static int conn_finished(void * cls,
+			 struct MHD_Connection * connection,
+			 void ** ptr) {
+
+  DBG("connection [%p] http request finished\n", connection);
+
+  // test: send request
+  // string req = "BUSY /session/1234567 HTTP/1.0" CRLF
+  //   "Content-Length: 0" CRLF
+  //   CRLF;
+  // MHD_queue_request(connection, req.size(), const_cast<char*>(req.c_str()));
+
+  return MHD_YES;
+}
+
 static int create_response(void * cls,
 		    struct MHD_Connection * connection,
 		    const char * url,
@@ -387,6 +402,13 @@ static int create_response(void * cls,
   return create_404_response(connection);
 }
 
+
+void mhd_dbg(void * arg, const char * fmt, va_list ap) {
+  char msg_[LOG_BUFFER_LEN];
+  int n_ = vsnprintf(msg_, sizeof(msg_), fmt, ap);
+  DBG("%s\n", msg_);
+}
+
 int MOD_CLS_NAME::preload() {
 
   AmConfigReader cfg;
@@ -409,12 +431,14 @@ int MOD_CLS_NAME::preload() {
   struct MHD_Daemon * ds;
  ///void* opt = (void*);
 
-  d = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY, //MHD_USE_THREAD_PER_CONNECTION,
+  d = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY | MHD_USE_DEBUG, //MHD_USE_THREAD_PER_CONNECTION,
   		       http_port,
   		       NULL,
   		       NULL,
   		       &create_response,
   		       (void*)PAGE,
+		       &conn_finished,
+		       NULL,
   		       MHD_OPTION_END);
   if (d == NULL) {
     ERROR("starting http server on port %u\n", http_port);
@@ -451,10 +475,11 @@ int MOD_CLS_NAME::preload() {
 			  HTTPS_PORT,
 			  NULL,
 			  NULL,
-			  &create_response,
-			  (void*)PAGE,
+			  &create_response, (void*)PAGE,
+			  &conn_finished, NULL,
 			  MHD_OPTION_HTTPS_MEM_KEY, key_pem.c_str(),
 			  MHD_OPTION_HTTPS_MEM_CERT, cert_pem.c_str(),
+			  MHD_OPTION_EXTERNAL_LOGGER, mhd_dbg, NULL,
 			  MHD_OPTION_END);
     if (ds == NULL) {
       DBG("starting https server on port %u failed - "
