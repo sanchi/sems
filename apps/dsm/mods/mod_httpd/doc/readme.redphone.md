@@ -26,6 +26,7 @@ todo:
 install and configuration (assuming debian/ubuntu)
 --------------------------------------------------
 
+<pre>
   apt-get install libevent-dev g++ make
   git clone https://github.com/sanchi/sems.git
   cd sems
@@ -44,6 +45,8 @@ install and configuration (assuming debian/ubuntu)
 
   ./sems -f etc/sems.conf -D 3 -E
 
+</pre>
+  
 sems.conf changes
 -----------------
  load_plugins=dsm
@@ -59,7 +62,9 @@ Redphone (in emulator AVD)
 --------------------------
 - open whisper.store with portecle (http://portecle.sourceforge.net/), add cert.pem, save store
 - patch redphone: 
+
 <pre>
+
 src/org/thoughtcrime/redphone/signaling/signals/Signal.java:
 diff --git a/src/org/thoughtcrime/redphone/signaling/signals/Signal.java b/src/org/thoughtcrime/redphone/signaling/signals/Signal.java
 index 79321c8..4a39996 100644
@@ -98,6 +103,7 @@ index 15eec64..592df65 100644
  }
 
 </pre>
+
 ---------------------------------------------------------------------------------------------
 AVD JNI exception:
 
@@ -191,3 +197,4 @@ I/DEBUG   (   49): signal 6 (SIGABRT), code -6 (SI_TKILL), fault addr --------
 W/ProcessCpuTracker(  375): Skipping unknown process pid 29894
 
 </pre>
+
